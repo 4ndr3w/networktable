@@ -1,0 +1,9 @@
+{
+  "name": "networktable.js",
+  "description": "An implementation of WPILib's network tables for Node",
+  "version": "0.0.1",
+  "dependencies": {
+    "dissolve": "*",
+    "concentrate": "*"
+  }
+}
