@@ -4,33 +4,13 @@ var Dissolve = require("dissolve"),
 
 var entries = new Array();
 
-function processAssignmentValue(stack)
-{
-	switch ( stack.vars.valueType )
-	{
-		case 0x00: // Boolean
-			stack = stack.uint8("value");
-			break;
-			
-		case 0x01: // Double
-			stack = stack.doublebe("value");
-			break;
-		default:
-			stack.vars.value = "unknown";
-			break;
-	}
-	return stack;
-}
-
 function packAssignmentValue(stack, value)
 {
 	if ( typeof value == "boolean" )
-		stack = stack.uint8(value?0x01:0x00);
+		return stack.uint8(value?0x01:0x00);
 	else if ( typeof value == "number" )
-		stack = stack.doublebe(value);
-	else 
-		stack = stack.uint8(0);
-	return stack;
+		return stack.doublebe(value);
+	return null;
 }
 
 function getAssignmentValueType(value)
@@ -42,34 +22,48 @@ function getAssignmentValueType(value)
 	return 0x01;
 }
 
+
 var parser = Dissolve().loop(function() 
 {
 	this.uint8("msgType").tap(function()
 	{
+		
 		if ( this.vars.msgType == 0x10 ) // Entry Assignment
 		{
-			this.uint8("keyLength")
-			.string("key")
-			.uint8("valueType")
-			.uint16("entryID")
-			.uint16("sequence").tap(function() 
+			function addNewEntry() 
 			{
-				processAssignmentValue(this).tap(function() {
-					entries[this.vars.entryID] = this.vars;
-					this.push(this.vars);
-					this.vars = {};
+				entries[this.vars.entryID] = this.vars;
+				this.vars = {};
+			}
+			
+			var kl = 0;
+			var stack = this.uint16be("keyLength").tap (function() {
+				this.string("key", this.vars.keyLength)
+				.uint8("valueType")
+				.uint16be("entryID")
+				.uint16be("sequence").tap(function()
+				{
+					if ( this.vars.valueType == 0x00 )
+						this.uint8("value").tap(addNewEntry);
+					else if ( this.vars.valueType == 0x01 )
+						this.doublebe("value").tap(addNewEntry);
 				});
 			});
 		}
 		else if ( this.vars.msgType == 0x11 )
 		{
+			function editExistingEntry()
+			{
+				entries[this.vars.entryID].value = this.vars.value;
+				this.vars = {};
+			}
+			
 			this.uint16("entryID").
 			uint16("sequence").tap(function() {
-				processAssignmentValue(this).tap(function() {
-					entries[this.vars.entryID].value = this.vars.value;
-					this.push(this.vars);
-					this.vars = {};
-				});
+				if ( typeof value == "boolean" )
+					this.uint8("value").tap(editExistingEntry);
+				else if ( typeof value == "number" )
+					this.doublebe("value").tap(editExistingEntry);
 			});
 		}
 	});
@@ -79,6 +73,8 @@ exports.connect = function(host)
 {
 	sock = net.connect(1735, host, function()
 	{
+		data = Concentrate().uint8(0x01).uint16be(512).result();
+		sock.write(data, "binary");
 		sock.pipe(parser);
 	});
 };
@@ -95,17 +91,26 @@ exports.get = function(key)
 
 exports.set = function(key, value)
 {
-	entry = exports.get(key);
+	var entry = undefined;
+	for ( k in entries )
+	{
+		if (entries[k].key == key)
+			entry = entries[k];
+	}
+	
 	var data = undefined;
 	if ( entry == undefined )
 	{
 		data = Concentrate()
 			.uint8(0x10)
-			.uint8(key.length).string(key)
+			.uint16be(key.length).string(key)
 			.uint8(getAssignmentValueType(value))
-			.uint16(0xFFFF)
-			.uint16(0x01);
-		packAssignmentValue(data, value);	
+			.uint16be(0xFFFF)
+			.uint16be(0x01);
+		if ( typeof value == "boolean" )
+			data.uint8(value?0x01:0x00);
+		else if ( typeof value == "number" )
+			data.doublebe(value);
 	}
 	else
 	{
@@ -114,8 +119,12 @@ exports.set = function(key, value)
 			.uint8(0x11)
 			.uint16(id)
 			.uint16(entry.sequence);
-		packAssignmentValue(data, value);	
+		if ( typeof value == "boolean" )
+			data.uint8(value?0x01:0x00);
+		else if ( typeof value == "number" )
+			data.doublebe(value);
 	}
-	socket.write(data.result(), "binary");
+	d = data.result();
+	sock.write(d, "binary");
 };
 
